@@ -14,6 +14,7 @@
   - 轮询(推荐用于内网机器):`gh api` 定时拉取 open issues,只处理"启动之后新建"的 issue;重启后可在补账窗口内回捞停机期间的新 issue(`backfillMs`);reopened 的老 issue 不会误触发
   - Webhook:`POST /webhook/issues`,兼容 GitHub / Gitee 的 `issues` 事件与 GitLab issue hook,仅接受新建动作(opened/open),按 delivery id 去重
 - **仓库 → 工作区映射**:每个仓库可指定本地 checkout 目录,agent 在对应代码库里调查、修改(不 commit / 不 push),产出中文处理报告(结论 / 已做修改 / 建议后续动作)
+- **模型与思考强度可选**:issue agent 可固定使用指定 provider/模型,并指定思考强度(reasoning effort);全留空则跟随 GUI 默认模型选择。保存时校验模型路由可解析、强度在所选模型支持列表内
 - **提示词模板可配置**:派发给 agent 的提示词是一份可编辑模板,占位符 `{{repo}}`、`{{number}}`、`{{title}}`、`{{body}}`、`{{url}}`(允许两侧空白);单遍插值,issue 正文里出现的占位符不会被展开;`{{body}}` 自动截断到 24000 字符
 - **对话保留**:处理会话与浏览器里手动开的会话走同一条创建路径(默认 preset + 默认模型 + workspace cwd),完成后留在工作区会话列表里,归档完全由人决定
 - **管理页**:`/webhook/issues/panel`,配置读写 + 实时状态(最近轮询、错误、处理历史),保存前逐项**验证**(仓库真实可访问 via `gh api`、工作区路径真实存在且是目录),任一失败拒绝保存且不影响现有配置

@@ -45,6 +45,12 @@ button.primary{background:#1a73e8;border-color:#1a73e8;color:#fff}
     <label class="f">Webhook Token<span class="hint">留空 = 关闭鉴权</span><input id="webhookToken" spellcheck="false" autocomplete="off"></label>
   </div>
 
+  <div class="row">
+    <label class="f">模型 · Provider<span class="hint">全留空 = 跟随 GUI 默认</span><select id="modelProvider"></select></label>
+    <label class="f">模型<select id="modelName"></select></label>
+    <label class="f">思考强度<select id="modelEffort"></select></label>
+  </div>
+
   <label class="f">Agent 提示词模板<span class="hint">占位符:{{repo}} {{number}} {{title}} {{body}} {{url}};{{body}} 自动截断到 24000 字符,单遍插值(正文里的占位符不会展开)</span>
     <textarea id="promptTpl" style="min-height:180px" spellcheck="false"></textarea></label>
 
@@ -79,10 +85,73 @@ function applyConfig(c) {
   $('promptTpl').value = c.promptTemplate || ''
 }
 
+var modelCatalog = { providers: [], defaultSelection: null, available: false }
+
+function setSelect(sel, items, value, fallbackLabel) {
+  sel.innerHTML = ''
+  var placeholder = document.createElement('option')
+  placeholder.value = ''
+  placeholder.textContent = fallbackLabel
+  sel.appendChild(placeholder)
+  var matched = false
+  items.forEach(function (item) {
+    var opt = document.createElement('option')
+    opt.value = item.value
+    opt.textContent = item.label
+    sel.appendChild(opt)
+    if (item.value === value) matched = true
+  })
+  if (!matched && value !== '') {
+    var raw = document.createElement('option')
+    raw.value = value
+    raw.textContent = value + '(目录外)'
+    sel.appendChild(raw)
+  }
+  sel.value = value
+}
+
+function defaultModelLabel() {
+  var d = modelCatalog.defaultSelection
+  return d ? '跟随默认(' + d.provider + '/' + d.model + (d.reasoningEffort ? ' · ' + d.reasoningEffort : '') + ')' : '跟随默认'
+}
+
+function fillModelSelects(m) {
+  var mp = m && m.model ? m.model : {}
+  var provider = modelCatalog.providers.filter(function (p) { return p.id === mp.provider })[0]
+  var models = provider ? provider.models : []
+  var model = models.filter(function (x) { return x.id === mp.model })[0]
+  setSelect($('modelProvider'), modelCatalog.providers.map(function (p) { return { value: p.id, label: p.name || p.id } }), mp.provider || '', defaultModelLabel())
+  setSelect($('modelName'), models.map(function (x) { return { value: x.id, label: x.name || x.id } }), mp.model || '', mp.provider ? '(请选择)' : '(随默认)')
+  setSelect($('modelEffort'), (model ? model.efforts : []).map(function (x) { return { value: x.id, label: x.name || x.id } }), mp.reasoningEffort || '', '模型默认')
+}
+
+function refreshModelDependent(which) {
+  var prov = $('modelProvider').value
+  var provider = modelCatalog.providers.filter(function (p) { return p.id === prov })[0]
+  var models = provider ? provider.models : []
+  if (which === 'provider') {
+    setSelect($('modelName'), models.map(function (x) { return { value: x.id, label: x.name || x.id } }), '', prov ? '(请选择)' : '(随默认)')
+    setSelect($('modelEffort'), [], '', '模型默认')
+    return
+  }
+  var mid = $('modelName').value
+  var model = models.filter(function (x) { return x.id === mid })[0]
+  setSelect($('modelEffort'), (model ? model.efforts : []).map(function (x) { return { value: x.id, label: x.name || x.id } }), '', '模型默认')
+}
+
 function loadConfig() {
   if (tok() === '') { msg('请先填写访问 Token', false); return }
   fetch(authUrl('config')).then(function (r) { return r.json() }).then(function (d) {
-    if (d.ok) { applyConfig(d.config); msg('配置已读取', true) } else { msg(d.error || '读取失败', false) }
+    if (d.ok) {
+      applyConfig(d.config)
+      if (d.modelOptions) {
+        modelCatalog.available = d.modelOptions.available !== false
+        modelCatalog.providers = d.modelOptions.providers || []
+        modelCatalog.defaultSelection = d.modelOptions.defaultSelection || null
+      }
+      fillModelSelects(d.config)
+      msg('配置已读取', true)
+    } else { msg(d.error || '读取失败', false) }
   }).catch(function (e) { msg('读取失败:' + e.message, false) })
 }
 
@@ -125,6 +194,11 @@ function saveConfig() {
     defaultWorkspace: defaultWs,
     token: $('webhookToken').value,
     promptTemplate: $('promptTpl').value,
+    model: {
+      provider: $('modelProvider').value,
+      model: $('modelName').value,
+      reasoningEffort: $('modelEffort').value,
+    },
   })
   fetch(authUrl('config'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: body })
     .then(function (r) { return r.json() })
@@ -180,6 +254,8 @@ if (savedToken !== null) {
 }
 $('save').addEventListener('click', saveConfig)
 $('load').addEventListener('click', function () { localStorage.setItem('issuebot-token', tok()); loadConfig() })
+$('modelProvider').addEventListener('change', function () { refreshModelDependent('provider') })
+$('modelName').addEventListener('change', function () { refreshModelDependent('model') })
 refresh()
 setInterval(refresh, 5000)
 </script>
