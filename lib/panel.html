@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Issue 监听管理</title>
+<style>
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;margin:0;background:#f6f7f9;color:#1c1e21}
+.wrap{max-width:760px;margin:0 auto;padding:28px 20px 60px}
+h1{font-size:18px;margin:0 0 4px}
+h2{font-size:14px;margin:26px 0 8px;color:#444}
+.sub{font-size:12px;color:#777;margin-bottom:18px}
+label.f{display:flex;flex-direction:column;gap:4px;margin-bottom:12px;font-size:12px;color:#555}
+input,textarea{font:inherit;border:1px solid #c9ccd1;border-radius:6px;padding:7px 9px;background:#fff;color:inherit;width:100%;box-sizing:border-box}
+textarea{min-height:92px;font-family:ui-monospace,Menlo,monospace;font-size:12px;resize:vertical}
+.hint{font-size:11px;color:#98a0a8;font-weight:400}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start}
+.row>label.f{flex:1;min-width:150px;max-width:250px}
+button{font:inherit;border:1px solid #9aa0a6;border-radius:6px;padding:6px 18px;background:#e8eaed;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+button.primary{background:#1a73e8;border-color:#1a73e8;color:#fff}
+.msg{font-size:12px;white-space:pre-line}
+.msg.ok{color:#137333}
+.msg.err{color:#c5221f}
+.panel{border:1px solid #dadce0;border-radius:8px;background:#fff;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all}
+.dim{color:#80868b;font-size:11px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Issue 监听管理</h1>
+  <div class="sub">轮询监听 GitHub 仓库新 issue(gh 登录鉴权,无需入站连接);webhook 入口同时保留。保存前逐项验证仓库可访问、工作区路径存在。</div>
+
+  <label class="f">访问 Token<input id="token" type="password" placeholder="webhook token" autocomplete="off"></label>
+
+  <label class="f">监听仓库<span class="hint">每行:owner/repo,可跟空格 + 本地工作区绝对路径;不写则用默认工作区</span>
+    <textarea id="repos" placeholder="owner/repo  /absolute/path/to/workspace" spellcheck="false"></textarea></label>
+
+  <label class="f">默认工作区<input id="defaultWs" spellcheck="false"></label>
+
+  <div class="row">
+    <label class="f">轮询间隔(秒)<input id="interval" type="number" min="15" max="3600"></label>
+    <label class="f">补账窗口(分钟)<span class="hint">重启后回捞窗口内新建未处理的 issue;0 = 不回捞</span><input id="backfill" type="number" min="0" max="10080"></label>
+    <label class="f">Webhook Token<span class="hint">留空 = 关闭鉴权</span><input id="webhookToken" spellcheck="false" autocomplete="off"></label>
+  </div>
+
+  <div class="row">
+    <button id="save" class="primary">保存设置</button>
+    <button id="load">读取配置</button>
+    <span id="msg" class="msg"></span>
+  </div>
+
+  <h2>实时状态</h2>
+  <div class="panel" id="status"><span class="dim">加载中…</span></div>
+
+  <h2>最近处理</h2>
+  <div class="panel" id="history"><span class="dim">暂无</span></div>
+</div>
+
+<script>
+var $ = function (id) { return document.getElementById(id) }
+
+function tok() { return $('token').value.trim() }
+function authUrl(base) { return base + (base.indexOf('?') === -1 ? '?' : '&') + 'token=' + encodeURIComponent(tok()) }
+function msg(text, ok) { var m = $('msg'); m.textContent = text; m.className = 'msg ' + (ok ? 'ok' : 'err') }
+
+function applyConfig(c) {
+  $('repos').value = (c.poll.repos || []).map(function (r) {
+    return c.repoWorkspaces && c.repoWorkspaces[r] ? r + '  ' + c.repoWorkspaces[r] : r
+  }).join('\n')
+  $('defaultWs').value = c.defaultWorkspace || ''
+  $('interval').value = String(Math.round((c.poll.intervalMs || 60000) / 1000))
+  $('backfill').value = String(Math.round((c.poll.backfillMs || 0) / 60000))
+  $('webhookToken').value = c.token || ''
+}
+
+function loadConfig() {
+  if (tok() === '') { msg('请先填写访问 Token', false); return }
+  fetch(authUrl('config')).then(function (r) { return r.json() }).then(function (d) {
+    if (d.ok) { applyConfig(d.config); msg('配置已读取', true) } else { msg(d.error || '读取失败', false) }
+  }).catch(function (e) { msg('读取失败:' + e.message, false) })
+}
+
+function parseRepos() {
+  var repos = []
+  var repoWorkspaces = {}
+  var lines = $('repos').value.split('\n')
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim()
+    if (line === '') continue
+    var parts = line.split(/\s+/)
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(parts[0])) { msg('仓库格式应为 owner/repo:' + line, false); return null }
+    if (parts.length > 2) { msg('每行最多两个值(仓库 + 工作区路径):' + line, false); return null }
+    if (parts.length === 2 && parts[1].charAt(0) !== '/') { msg('工作区路径必须是绝对路径:' + parts[1], false); return null }
+    repos.push(parts[0])
+    if (parts.length === 2) repoWorkspaces[parts[0]] = parts[1]
+  }
+  return { repos: repos, repoWorkspaces: repoWorkspaces }
+}
+
+function saveConfig() {
+  var parsed = parseRepos()
+  if (parsed === null) return
+  var interval = Number($('interval').value)
+  var backfill = Number($('backfill').value)
+  var defaultWs = $('defaultWs').value
+  if (!(interval >= 15 && interval <= 3600)) { msg('轮询间隔需在 15–3600 秒之间', false); return }
+  if (!(backfill >= 0 && backfill <= 10080)) { msg('补账窗口需在 0–10080 分钟之间', false); return }
+  if (defaultWs.charAt(0) !== '/') { msg('默认工作区必须是绝对路径(以 / 开头)', false); return }
+  localStorage.setItem('issuebot-token', tok())
+  var btn = $('save')
+  btn.disabled = true
+  btn.textContent = '检查中…'
+  msg('', true)
+  var body = JSON.stringify({
+    repos: parsed.repos,
+    repoWorkspaces: parsed.repoWorkspaces,
+    intervalMs: Math.round(interval * 1000),
+    backfillMs: Math.round(backfill * 60000),
+    defaultWorkspace: defaultWs,
+    token: $('webhookToken').value,
+  })
+  fetch(authUrl('config'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: body })
+    .then(function (r) { return r.json() })
+    .then(function (d) {
+      if (d.ok) { msg(d.message || '已保存', true); refresh() } else { msg(d.error || '保存失败', false) }
+    })
+    .catch(function (e) { msg('保存失败:' + e.message, false) })
+    .finally(function () { btn.disabled = false; btn.textContent = '保存设置' })
+}
+
+function refresh() {
+  fetch('.', { cache: 'no-store' }).then(function (r) { return r.json() }).then(function (d) {
+    var s = $('status')
+    s.textContent = ''
+    var head = document.createElement('span')
+    head.className = 'dim'
+    head.textContent = d.poll.enabled
+      ? '轮询中 · 每 ' + Math.round(d.poll.intervalMs / 1000) + ' 秒 · gh 鉴权 · 仅处理 ' + d.poll.triggersOnlyIssuesCreatedAfter.slice(0, 19).replace('T', ' ') + ' UTC 之后新建的 issue'
+      : '轮询未启用(仓库列表为空)'
+    s.appendChild(head)
+    d.poll.repos.forEach(function (row) {
+      var el = document.createElement('span')
+      el.className = 'mono'
+      el.textContent = row.repo + '  ->  ' + (row.workspace || '-') + ' · polled ' + (row.lastPollAt > 0 ? new Date(row.lastPollAt).toLocaleTimeString() : '-') + ' · open(近30) ' + row.newestOpen + (row.lastError ? ' · ' + row.lastError : '')
+      s.appendChild(el)
+    })
+    var rn = document.createElement('span')
+    rn.className = 'dim'
+    rn.textContent = '运行中的处理:' + d.running
+    s.appendChild(rn)
+    var h = $('history')
+    h.textContent = ''
+    if (!d.history || d.history.length === 0) {
+      var he = document.createElement('span')
+      he.className = 'dim'
+      he.textContent = '暂无'
+      h.appendChild(he)
+      return
+    }
+    d.history.slice(0, 10).forEach(function (e) {
+      var el = document.createElement('span')
+      el.className = 'mono'
+      el.textContent = '#' + e.number + ' ' + String(e.title).slice(0, 48) + ' · ' + e.state + ' · ' + (e.source || 'webhook') + (e.state === 'error' && e.error ? ' · ' + e.error : '')
+      h.appendChild(el)
+    })
+  }).catch(function () {})
+}
+
+var savedToken = localStorage.getItem('issuebot-token')
+if (savedToken !== null) {
+  $('token').value = savedToken
+  if (savedToken !== '') loadConfig()
+}
+$('save').addEventListener('click', saveConfig)
+$('load').addEventListener('click', function () { localStorage.setItem('issuebot-token', tok()); loadConfig() })
+refresh()
+setInterval(refresh, 5000)
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "name": "dsh-issue-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Issue 监听:host-plane 插件,通过 webhook 或 gh 轮询监听仓库新 issue,自动派发 agent 处理;会话保留在映射的工作区由人归档。自带 /panel 管理页,配置落盘于 ~/.dsh/issue-bot.config.json。",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lixiang9716/dsh-issue-bot.git"
+  },
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/panel.html",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

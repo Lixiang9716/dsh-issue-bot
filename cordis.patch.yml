@@ -1,0 +1,6 @@
+# dsh-issue-bot bundle patch: one host-plane listener row.
+# 插件不提供任何服务,只消费 webServer / agents / timer / shell,
+# 且 webhook→新会话跨越会话边界,因此属于宿主组合而非任何 agent preset。
+- insert:
+    - id: issue-bot
+      name: dsh-issue-bot
